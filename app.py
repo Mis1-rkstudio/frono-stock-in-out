@@ -1,4 +1,4 @@
-from flask import Flask, render_template_string, request, Response
+from flask import Flask, render_template_string
 import datetime
 import pytz
 import scripts.stock_in_excel as stock_processor
@@ -6,7 +6,6 @@ import sys
 from contextlib import contextmanager
 import os
 import json
-from functools import wraps
 
 app = Flask(__name__)
 
@@ -19,18 +18,6 @@ IST = pytz.timezone('Asia/Kolkata')
 # Create logs directory if it doesn't exist
 LOGS_DIR = "logs"
 os.makedirs(LOGS_DIR, exist_ok=True)
-
-# Get scheduler token from environment variable
-SCHEDULER_TOKEN = os.environ.get('SCHEDULER_TOKEN', 'your-secret-token')
-
-def require_scheduler_token(f):
-    @wraps(f)
-    def decorated_function(*args, **kwargs):
-        token = request.headers.get('X-Scheduler-Token')
-        if token != SCHEDULER_TOKEN:
-            return Response('Unauthorized', status=401)
-        return f(*args, **kwargs)
-    return decorated_function
 
 def save_logs_to_file(logs, location):
     """Save logs to a JSON file with timestamp"""
@@ -129,13 +116,6 @@ PAGE_TEMPLATE = """
             border-radius: 4px;
             font-size: 0.9em;
         }
-        .schedule-info {
-            margin-top: 20px;
-            padding: 15px;
-            background-color: #e8f4f8;
-            border-radius: 4px;
-            border-left: 4px solid #3498db;
-        }
     </style>
 </head>
 <body>
@@ -145,12 +125,7 @@ PAGE_TEMPLATE = """
         
         <div class="nav-links">
             <a href="/status">✅ Status</a>
-        </div>
-
-        <div class="schedule-info">
-            <h3>📅 Schedule Information</h3>
-            <p>The stock process runs automatically every day at 11:00 PM IST.</p>
-            <p>Last run status and logs are displayed below.</p>
+            <a href="/stock">📦 Stock In/Out</a>
         </div>
 
         <hr>
@@ -194,10 +169,8 @@ def home():
 def health_check():
     return "✅ Service is healthy", 200
 
-@app.route("/scheduled", methods=["POST"])
-@require_scheduler_token
-def scheduled_run():
-    """Endpoint for scheduled runs"""
+@app.route("/stock", methods=["GET"])
+def run_stock_process():
     global last_run_time
     
     with capture_logs() as logs:
@@ -205,29 +178,17 @@ def scheduled_run():
             # Run the stock process
             stock_processor.stockInItem("kolkata")
             last_run_time = datetime.datetime.now(pytz.utc)
-            logs.append("✅ Scheduled stock process completed successfully")
-            
-            # Save logs to file
-            log_file = save_logs_to_file(logs, "kolkata")
-            
-            return {
-                "status": "success",
-                "message": "Stock process completed successfully",
-                "log_file": log_file,
-                "timestamp": last_run_time.isoformat()
-            }, 200
-            
+            logs.append("✅ Stock process completed successfully")
         except Exception as e:
-            error_msg = f"❌ Error in scheduled run: {str(e)}"
-            logs.append(error_msg)
-            log_file = save_logs_to_file(logs, "kolkata")
-            
-            return {
-                "status": "error",
-                "message": error_msg,
-                "log_file": log_file,
-                "timestamp": datetime.datetime.now(pytz.utc).isoformat()
-            }, 500
+            logs.append(f"❌ Error: {str(e)}")
+        
+        # Save logs to file
+        log_file = save_logs_to_file(logs, "kolkata")
+    
+    return render_template_string(PAGE_TEMPLATE,
+                                last_run=last_run_time.astimezone(IST).strftime("%Y-%m-%d %H:%M:%S") if last_run_time else "No runs yet",
+                                logs=logs,
+                                log_file=log_file)
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=8080)
